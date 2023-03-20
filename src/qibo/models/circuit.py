@@ -361,6 +361,7 @@ class Circuit:
                         "Cannot create deep copy of fused circuit.",
                     )
                 new_circuit.add(copy.copy(gate))
+            new_circuit.measurements = list(self.measurements)
         else:
             if self.accelerators:  # pragma: no cover
                 raise_error(
