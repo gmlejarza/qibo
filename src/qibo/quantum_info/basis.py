@@ -5,118 +5,15 @@ import numpy as np
 
 from qibo import matrices
 from qibo.config import raise_error
-
-
-def vectorization(state, order: str = "row"):
-    """Returns state :math:`\\rho` in its Liouville
-    representation :math:`\\ket{\\rho}`.
-
-    Args:
-        state: state vector or density matrix.
-        order (str, optional): If ``"row"``, vectorization is performed
-            row-wise. If ``"column"``, vectorization is performed
-            column-wise. If ``"system"``, a block-vectorization is
-            performed. Default is ``"row"``.
-
-    Returns:
-        Liouville representation of ``state``.
-    """
-
-    if (
-        (len(state.shape) >= 3)
-        or (len(state) == 0)
-        or (len(state.shape) == 2 and state.shape[0] != state.shape[1])
-    ):
-        raise_error(
-            TypeError,
-            f"Object must have dims either (k,) or (k,k), but have dims {state.shape}.",
-        )
-
-    if not isinstance(order, str):
-        raise_error(
-            TypeError, f"order must be type str, but it is type {type(order)} instead."
-        )
-    else:
-        if (order != "row") and (order != "column") and (order != "system"):
-            raise_error(
-                ValueError,
-                f"order must be either 'row' or 'column' or 'system', but it is {order}.",
-            )
-
-    if len(state.shape) == 1:
-        state = np.outer(state, np.conj(state))
-
-    if order == "row":
-        state = np.reshape(state, (1, -1), order="C")[0]
-    elif order == "column":
-        state = np.reshape(state, (1, -1), order="F")[0]
-    else:
-        d = len(state)
-        nqubits = int(np.log2(d))
-
-        new_axis = []
-        for x in range(nqubits):
-            new_axis += [x + nqubits, x]
-        state = np.reshape(
-            np.transpose(np.reshape(state, [2] * 2 * nqubits), axes=new_axis), -1
-        )
-
-    return state
-
-
-def unvectorization(state, order: str = "row"):
-    """Returns state :math:`\\rho` from its Liouville
-    representation :math:`\\ket{\\rho}`.
-
-    Args:
-        state: :func:`vectorization` of a quantum state.
-        order (str, optional): If ``"row"``, unvectorization is performed
-            row-wise. If ``"column"``, unvectorization is performed
-            column-wise. If ``"system"``, system-wise vectorization is
-            performed. Default is ``"row"``.
-
-    Returns:
-        Density matrix of ``state``.
-    """
-
-    if len(state.shape) != 1:
-        raise_error(
-            TypeError,
-            f"Object must have dims (k,), but have dims {state.shape}.",
-        )
-
-    if not isinstance(order, str):
-        raise_error(
-            TypeError, f"order must be type str, but it is type {type(order)} instead."
-        )
-    else:
-        if (order != "row") and (order != "column") and (order != "system"):
-            raise_error(
-                ValueError,
-                f"order must be either 'row' or 'column' or 'system', but it is {order}.",
-            )
-
-    d = int(np.sqrt(len(state)))
-
-    if (order == "row") or (order == "column"):
-        order = "C" if order == "row" else "F"
-        state = np.reshape(state, (d, d), order=order)
-    else:
-        nqubits = int(np.log2(d))
-        axes_old = list(np.arange(0, 2 * nqubits))
-        state = np.reshape(
-            np.transpose(
-                np.reshape(state, [2] * 2 * nqubits),
-                axes=axes_old[1::2] + axes_old[0::2],
-            ),
-            [2**nqubits] * 2,
-        )
-
-    return state
+from qibo.quantum_info.superoperator_transformations import vectorization
 
 
 def pauli_basis(
-    nqubits: int, normalize: bool = False, vectorize: bool = False, order: str = None
+    nqubits: int,
+    normalize: bool = False,
+    vectorize: bool = False,
+    sparse: bool = False,
+    order: str = None,
 ):
     """Creates the ``nqubits``-qubit Pauli basis.
 
@@ -127,6 +24,8 @@ def pauli_basis(
         vectorize (bool, optional): If ``False``, returns a nested array with
             all Pauli matrices. If ``True``, retuns an array where every
             row is a vectorized Pauli matrix. Defaults to ``False``.
+        sparse (bool, optional) If ``True``, retuns Pauli basis in a sparse
+            representation. Default is ``False``.
         order (str, optional): If ``"row"``, vectorization of Pauli basis is
             performed row-wise. If ``"column"``, vectorization is performed
             column-wise. If ``"system"``, system-wise vectorization is
@@ -134,7 +33,9 @@ def pauli_basis(
             forced. Default is ``None``.
 
     Returns:
-        ndarray: all Pauli matrices forming the basis.
+        ndarray or tuple: all Pauli matrices forming the basis. If ``sparse=True``
+            and ``vectorize=True``, tuple is composed of an array of non-zero
+            elements and an array with their row-wise indexes.
     """
 
     if nqubits <= 0:
@@ -152,33 +53,58 @@ def pauli_basis(
             f"vectorize must be type bool, but it is type {type(vectorize)} instead.",
         )
 
+    if not isinstance(sparse, bool):
+        raise_error(
+            TypeError,
+            f"sparse must be type bool, but it is type {type(sparse)} instead.",
+        )
+
     if vectorize and order is None:
         raise_error(ValueError, "when vectorize=True, order must be specified.")
 
-    basis = [matrices.I, matrices.X, matrices.Y, matrices.Z]
+    if sparse and not vectorize:
+        raise_error(
+            NotImplementedError,
+            "sparse representation is not implemented for unvectorized Pauli basis.",
+        )
 
-    if nqubits >= 2:
-        basis = list(product(basis, repeat=nqubits))
-        if vectorize:
-            basis = [
-                vectorization(reduce(np.kron, matrices), order=order)
-                for matrices in basis
-            ]
-        else:
-            basis = [reduce(np.kron, matrices) for matrices in basis]
+    basis_single = [matrices.I, matrices.X, matrices.Y, matrices.Z]
+
+    if nqubits > 1:
+        basis_full = list(product(basis_single, repeat=nqubits))
+        basis_full = [reduce(np.kron, row) for row in basis_full]
     else:
-        if vectorize:
-            basis = [vectorization(matrix, order=order) for matrix in basis]
+        basis_full = basis_single
+
+    if vectorize and sparse:
+        basis, indexes = [], []
+        for row in basis_full:
+            row = vectorization(row, order=order)
+            row_indexes = list(np.flatnonzero(row))
+            indexes.append(row_indexes)
+            basis.append(row[row_indexes])
+            del row
+    elif vectorize and not sparse:
+        basis = [vectorization(matrix, order=order) for matrix in basis_full]
+    else:
+        basis = basis_full
 
     basis = np.array(basis)
 
     if normalize:
         basis /= np.sqrt(2**nqubits)
 
+    if vectorize and sparse:
+        indexes = np.array(indexes)
+
+        return basis, indexes
+
     return basis
 
 
-def comp_basis_to_pauli(nqubits: int, normalize: bool = False, order: str = "row"):
+def comp_basis_to_pauli(
+    nqubits: int, normalize: bool = False, sparse: bool = False, order: str = "row"
+):
     """Unitary matrix :math:`U` that converts operators from the Liouville
     representation in the computational basis to the Pauli-Liouville
     representation.
@@ -211,23 +137,40 @@ def comp_basis_to_pauli(nqubits: int, normalize: bool = False, order: str = "row
         nqubits (int): number of qubits.
         normalize (bool, optional): If ``True``, converts to the
             Pauli basis. Defaults to ``False``.
+        sparse (bool, optional): If ``True``, returns unitary matrix in
+            sparse representation. Default is ``False``.
         order (str, optional): If ``"row"``, vectorization of Pauli basis is
             performed row-wise. If ``"column"``, vectorization is performed
             column-wise. If ``"system"``, system-wise vectorization is
             performed. Default is ``"row"``.
 
     Returns:
-        Unitary matrix :math:`U`.
+        ndarray or tuple: Unitary matrix :math:`U`. If ``sparse=True``,
+            tuple is composed of array of non-zero elements and an
+            array with their row-wise indexes.
 
     """
 
-    unitary = pauli_basis(nqubits, normalize, vectorize=True, order=order)
+    if sparse:
+        elements, indexes = pauli_basis(
+            nqubits, normalize, vectorize=True, sparse=sparse, order=order
+        )
+        elements = np.conj(elements)
+
+        return elements, indexes
+
+    unitary = pauli_basis(
+        nqubits, normalize, vectorize=True, sparse=sparse, order=order
+    )
+
     unitary = np.conj(unitary)
 
     return unitary
 
 
-def pauli_to_comp_basis(nqubits: int, normalize: bool = False, order: str = "row"):
+def pauli_to_comp_basis(
+    nqubits: int, normalize: bool = False, sparse: bool = False, order: str = "row"
+):
     """Unitary matrix :math:`U` that converts operators from the
     Pauli-Liouville representation to the Liouville representation
     in the computational basis.
@@ -241,6 +184,8 @@ def pauli_to_comp_basis(nqubits: int, normalize: bool = False, order: str = "row
         nqubits (int): number of qubits.
         normalize (bool, optional): If ``True``, converts to the
             Pauli basis. Defaults to ``False``.
+        sparse (bool, optional): If ``True``, returns unitary matrix in
+            sparse representation. Default is ``False``.
         order (str, optional): If ``"row"``, vectorization of Pauli basis is
             performed row-wise. If ``"column"``, vectorization is performed
             column-wise. If ``"system"``, system-wise vectorization is
@@ -250,7 +195,19 @@ def pauli_to_comp_basis(nqubits: int, normalize: bool = False, order: str = "row
         Unitary matrix :math:`U`.
     """
 
-    unitary = pauli_basis(nqubits, normalize, vectorize=True, order=order)
+    unitary = pauli_basis(nqubits, normalize, vectorize=True, sparse=False, order=order)
     unitary = np.transpose(unitary)
+
+    if sparse:
+        elements, indexes = [], []
+        for row in unitary:
+            index_list = list(np.flatnonzero(row))
+            indexes.append(index_list)
+            elements.append(row[index_list])
+
+        elements = np.array(elements)
+        indexes = np.array(indexes)
+
+        return elements, indexes
 
     return unitary

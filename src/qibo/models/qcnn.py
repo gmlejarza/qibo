@@ -1,6 +1,5 @@
 import numpy as np
 
-import qibo
 from qibo import gates, matrices
 from qibo.models import Circuit
 
@@ -20,16 +19,18 @@ class QuantumCNN:
             will be initialized to zero.
     Example:
         .. testcode::
+            import qibo
             from qibo.models.qcnn import QuantumCNN
-            from qibo import gates, matrices
-            from qibo.models import Circuit
             import math
+            import qibo
             import numpy as np
             import random
 
+            qibo.set_backend("numpy")
             data = np.random.rand(16)
             data = data / np.linalg.norm(data)
-            labels = [[1], [-1]]
+            data = [data]
+            labels = [[1]]
             testbias = np.zeros(1)
             testangles = [random.uniform(0, 2 * np.pi) for i in range(21 * 2)]
             init_theta = np.concatenate((testbias, testangles))
@@ -58,6 +59,15 @@ class QuantumCNN:
         self._circuit = self.ansatz(nlayers, params=params)
 
     def quantum_conv_circuit(self, bits, symbols):
+        """
+        Internal helper function to construct a single convolutional layer.
+
+        Args:
+            bits: list or numpy.array with the qubits that the convolutional layer should apply to.
+            symbols: list or numpy.array with the angles to be used in the circuit.
+        Returns:
+            Circuit for a single convolutional layer
+        """
         c = Circuit(self.nqubits)
         for first, second in zip(bits[0::2], bits[1::2]):
             c += self.two_qubit_unitary([first, second], symbols)
@@ -69,6 +79,16 @@ class QuantumCNN:
         return c
 
     def quantum_pool_circuit(self, source_bits, sink_bits, symbols):
+        """
+        Internal helper function to construct a single pooling layer.
+
+        Args:
+            source_bits: list or numpy.array with the source qubits for the pooling layer.
+            sink_bits: list or numpy.array with the sink qubits for the pooling layer.
+            symbols: list or numpy.array with the angles to be used in the circuit.
+        Returns:
+            Circuit for a single pooling layer
+        """
         c = Circuit(self.nqubits)
         for source, sink in zip(source_bits, sink_bits):
             c += self.two_qubit_pool(source, sink, symbols)
@@ -77,10 +97,10 @@ class QuantumCNN:
     def ansatz(self, nlayers, params=None):
         """
         Args:
-            theta: list or numpy.array with the angles to be used in the circuit
-            nlayers: int number of layers of the varitional circuit ansatz
+            theta: list or numpy.array with the angles to be used in the circuit.
+            nlayers: int number of layers of the varitional circuit ansatz.
         Returns:
-            Circuit implementing the QCNN variational ansatz
+            Circuit implementing the QCNN variational ansatz.
         """
 
         nparams_conv = self.nparams_conv
@@ -114,9 +134,15 @@ class QuantumCNN:
         return c
 
     def one_qubit_unitary(self, bit, symbols):
-        """Make a circuit enacting a rotation of the bloch sphere about the X,
+        """
+        Internal helper function to make a circuit enacting a rotation of the bloch sphere about the X,
         Y and Z axis, that depends on the values in `symbols`.
-        Symbols should be a list of length 3.
+
+        Args:
+            bit: the qubit to apply the one-qubit unitaries to
+            symbols: length 3 array containing the parameters
+        Returns:
+            Circuit containing the unitaries added to the specified qubit.
         """
         c = Circuit(self.nqubits)
         c.add(gates.RX(bit, symbols[0]))
@@ -126,9 +152,16 @@ class QuantumCNN:
         return c
 
     def two_qubit_unitary(self, bits, symbols):
-        """Make a circuit that creates an arbitrary two qubit unitary.
-        Symbols should be a list of length 15.
         """
+        Internal helper function to create a circuit consisting of two qubit unitaries.
+
+        Args:
+            bits: the two qubits to apply the unitaries to
+            symbols: length 15 array containing the parameters
+        Returns:
+            Circuit containing the unitaries added to the specified qubits.
+        """
+
         c = Circuit(self.nqubits)
         c += self.one_qubit_unitary(bits[0], symbols[0:3])
         c += self.one_qubit_unitary(bits[1], symbols[3:6])
@@ -142,9 +175,16 @@ class QuantumCNN:
         return c
 
     def two_qubit_pool(self, source_qubit, sink_qubit, symbols):
-        """Make a circuit to do a parameterized 'pooling' operation, which
+        """
+        Internal helper function to create a circuit to do a parameterized 'pooling' operation with controlled unitaries, which
         attempts to reduce entanglement down from two qubits to just one.
-        Symbols should be a list of 6 params.
+
+        Args:
+            source_qubit: the control qubit.
+            sink_qubit: the target qubit for the controlled unitaries.
+            symbols: array with 6 elements containing the parameters.
+        Returns:
+            Circuit containing the unitaries added to the specified qubits.
         """
         pool_circuit = Circuit(self.nqubits)
         sink_basis_selector = self.one_qubit_unitary(sink_qubit, symbols[0:3])
@@ -156,8 +196,21 @@ class QuantumCNN:
 
         return pool_circuit
 
-    def set_circuit_params(self, angles):
-        params = list(angles)
+    def set_circuit_params(self, angles, has_bias=False):
+        """
+        Sets the parameters of the QCNN circuit. Can be used to load previously saved or optimized parameters.
+
+        Args:
+            angles: the parameters to be loaded.
+            has_bias: specify whether the list of angles contains the bias.
+
+        """
+        if not has_bias:
+            params = list(angles)
+        else:
+            self._optimal_angles = angles
+            params = list(angles[self.measured_qubits :])
+
         expanded_params = []
         nbits = self.nqubits
         for layer in range(self.nlayers):
@@ -176,12 +229,12 @@ class QuantumCNN:
     def Classifier_circuit(self, theta):
         """
         Args:
-            theta: list or numpy.array with the biases and the angles to be used in the circuit
-            nlayers: int number of layers of the varitional circuit ansatz
-            RY: if True, parameterized Rx,Rz,Rx gates are used in the circuit
-                if False, parameterized Ry gates are used in the circuit (default=False)
+            theta: list or numpy.array with the biases and the angles to be used in the circuit.
+            nlayers: int number of layers of the varitional circuit ansatz.
+            RY: if True, parameterized Rx,Rz,Rx gates are used in the circuit.
+                if False, parameterized Ry gates are used in the circuit (default=False).
         Returns:
-            Circuit implementing the variational ansatz for angles "theta"
+            Circuit implementing the variational ansatz for angles "theta".
         """
         bias = np.array(theta[0 : self.measured_qubits])
         angles = theta[self.measured_qubits :]
@@ -192,11 +245,11 @@ class QuantumCNN:
     def Predictions(self, circuit, theta, init_state, nshots=10000):
         """
         Args:
-            theta: list or numpy.array with the biases to be used in the circuit
-            init_state: numpy.array with the quantum state to be classified
-            nshots: int number of runs of the circuit during the sampling process (default=10000)
+            theta: list or numpy.array with the biases to be used in the circuit.
+            init_state: numpy.array with the quantum state to be classified.
+            nshots: int number of runs of the circuit during the sampling process (default=10000).
         Returns:
-            numpy.array() with predictions for each qubit, for the initial state
+            numpy.array() with predictions for each qubit, for the initial state.
         """
         bias = np.array(theta[0 : self.measured_qubits])
         circuit_exec = circuit(init_state, nshots)
@@ -213,10 +266,10 @@ class QuantumCNN:
     def square_loss(self, labels, predictions):
         """
         Args:
-            labels: list or numpy.array with the qubit labels of the quantum states to be classified
-            predictions: list or numpy.array with the qubit predictions for the quantum states to be classified
+            labels: list or numpy.array with the qubit labels of the quantum states to be classified.
+            predictions: list or numpy.array with the qubit predictions for the quantum states to be classified.
         Returns:
-            numpy.float32 with the value of the square-loss function
+            numpy.float32 with the value of the square-loss function.
         """
         loss = 0
         for l, p in zip(labels, predictions):
@@ -228,13 +281,13 @@ class QuantumCNN:
     def Cost_function(self, theta, data=None, labels=None, nshots=10000):
         """
         Args:
-            theta: list or numpy.array with the biases and the angles to be used in the circuit
-            nlayers: int number of layers of the varitional circuit ansatz
-            data: numpy.array data[page][word]  (this is an array of kets)
-            labels: list or numpy.array with the labels of the quantum states to be classified
-            nshots: int number of runs of the circuit during the sampling process (default=10000)
+            theta: list or numpy.array with the biases and the angles to be used in the circuit.
+            nlayers: int number of layers of the varitional circuit ansatz.
+            data: numpy.array data[page][word]  (this is an array of kets).
+            labels: list or numpy.array with the labels of the quantum states to be classified.
+            nshots: int number of runs of the circuit during the sampling process (default=10000).
         Returns:
-            numpy.float32 with the value of the square-loss function
+            numpy.float32 with the value of the square-loss function.
         """
         circ = self.Classifier_circuit(theta)
 
@@ -253,15 +306,13 @@ class QuantumCNN:
     ):
         """
         Args:
-            theta: list or numpy.array with the angles to be used in the circuit
-            nlayers: int number of layers of the varitional ansatz
-            init_state: numpy.array with the quantum state to be Schmidt-decomposed
-            nshots: int number of runs of the circuit during the sampling process (default=10000)
-            RY: if True, parameterized Rx,Rz,Rx gates are used in the circuit
-                if False, parameterized Ry gates are used in the circuit (default=True)
-            method: str 'classical optimizer for the minimization'. All methods from scipy.optimize.minmize are suported (default='Powell')
+            init_theta: list or numpy.array with the angles to be used in the circuit.
+            data: the training data to be used in the minimization.
+            labels: the corresponding ground truth for the training data.
+            nshots: int number of runs of the circuit during the sampling process (default=10000).
+            method: str 'classical optimizer for the minimization'. All methods from scipy.optimize.minmize are suported (default='Powell').
         Returns:
-            numpy.float64 with value of the minimum found, numpy.ndarray with the optimal angles
+            numpy.float64 with value of the minimum found, numpy.ndarray with the optimal angles.
         """
         from scipy.optimize import minimize
 
@@ -279,12 +330,12 @@ class QuantumCNN:
     def Accuracy(self, labels, predictions, sign=True, tolerance=1e-2):
         """
         Args:
-            labels: numpy.array with the labels of the quantum states to be classified
-            predictions: numpy.array with the predictions for the quantum states classified
-            sign: if True, labels = np.sign(labels) and predictions = np.sign(predictions) (default=True)
-            tolerance: float tolerance level to consider a prediction correct (default=1e-2)
+            labels: numpy.array with the labels of the quantum states to be classified.
+            predictions: numpy.array with the predictions for the quantum states classified.
+            sign: if True, labels = np.sign(labels) and predictions = np.sign(predictions) (default=True).
+            tolerance: float tolerance level to consider a prediction correct (default=1e-2).
         Returns:
-            float with the proportion of states classified successfully
+            float with the proportion of states classified successfully.
         """
         if sign == True:
             labels = [np.sign(label) for label in labels]
@@ -300,6 +351,15 @@ class QuantumCNN:
         return accur
 
     def predict(self, init_state, nshots=10000):
+        """
+        This function is used to produce predictions on new input state after the model is trained. Currently it only takes in one input data.
+
+        Args:
+            init_state: the input state to be predicted.
+            nshots (default=10000): number of shots.
+        Returns:
+            numpy.array() with predictions for each qubit, for the initial state.
+        """
         return self.Predictions(
             self._circuit, self._optimal_angles, init_state, nshots=nshots
         )
