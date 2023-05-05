@@ -167,7 +167,7 @@ class VQRegressor:
             this_feature: np.float64 array 2**nqubits long, containing a specific feature
         Returns: circuit's prediction of the output variable, evaluated as difference of probabilities
         """
-        nshots = 1024
+        nshots = 1024 
         c = self.circuit(this_feature)
         results = c(nshots=nshots).probabilities(qubits=[0])
         res = results[0] - results[1]
